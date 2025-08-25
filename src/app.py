@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
-import tensorflow as tf   # use tensorflow.keras to avoid compatibility errors
+import keras   # use standalone keras (since TensorFlow import caused issues)
 import numpy as np
 from PIL import Image
 import io
@@ -16,7 +16,7 @@ CORS(app)  # Enable CORS if calling from a JS frontend
 # Logging setup
 logging.basicConfig(level=logging.INFO)
 
-# Lazy load the model (prevents startup crashes if file is missing during build)
+# Lazy load the model
 model = None
 MODEL_PATH = os.path.join(
     os.path.dirname(__file__),  # current script directory
@@ -29,17 +29,14 @@ def load_model():
     if model is None:
         if not os.path.exists(MODEL_PATH):
             raise FileNotFoundError(f"Model file not found at {MODEL_PATH}")
-        model = tf.keras.models.load_model(MODEL_PATH)
+        model = keras.models.load_model(MODEL_PATH)
     return model
 
 # Define class labels (digits 0–9 and uppercase A–Z)
 class_names = [str(i) for i in range(10)] + [chr(ord("A") + i) for i in range(26)]
 
 def preprocess_image(image_data):
-    """
-    Convert base64-encoded image into a processed 28x28 grayscale NumPy array
-    suitable for model input.
-    """
+    """Convert base64-encoded image into a processed 28x28 grayscale NumPy array suitable for model input."""
     try:
         image_data = image_data.split(",")[1]  # Remove base64 prefix
         image_bytes = base64.b64decode(image_data)
