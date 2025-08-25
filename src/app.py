@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
-import keras
+import tensorflow as tf   # use tensorflow.keras to avoid compatibility errors
 import numpy as np
 from PIL import Image
 import io
@@ -16,23 +16,24 @@ CORS(app)  # Enable CORS if calling from a JS frontend
 # Logging setup
 logging.basicConfig(level=logging.INFO)
 
-
-
-import os
-
+# Lazy load the model (prevents startup crashes if file is missing during build)
+model = None
 MODEL_PATH = os.path.join(
     os.path.dirname(__file__),  # current script directory
-    'saved_models',
-    'cnn_alphanumeric_model_20250601_062953.h5'
+    "saved_models",
+    "cnn_alphanumeric_model_20250601_062953.h5"
 )
-model = keras.models.load_model(MODEL_PATH)
 
-
-
-
+def load_model():
+    global model
+    if model is None:
+        if not os.path.exists(MODEL_PATH):
+            raise FileNotFoundError(f"Model file not found at {MODEL_PATH}")
+        model = tf.keras.models.load_model(MODEL_PATH)
+    return model
 
 # Define class labels (digits 0–9 and uppercase A–Z)
-class_names = [str(i) for i in range(10)] + [chr(ord('A') + i) for i in range(26)]
+class_names = [str(i) for i in range(10)] + [chr(ord("A") + i) for i in range(26)]
 
 def preprocess_image(image_data):
     """
@@ -40,7 +41,7 @@ def preprocess_image(image_data):
     suitable for model input.
     """
     try:
-        image_data = image_data.split(',')[1]  # Remove base64 prefix
+        image_data = image_data.split(",")[1]  # Remove base64 prefix
         image_bytes = base64.b64decode(image_data)
     except Exception:
         raise ValueError("Invalid image format (not proper base64)")
@@ -49,12 +50,12 @@ def preprocess_image(image_data):
     image = Image.open(io.BytesIO(image_bytes))
 
     # Convert to RGB if it has an alpha channel
-    if image.mode == 'RGBA':
-        background = Image.new('RGB', image.size, (255, 255, 255))
+    if image.mode == "RGBA":
+        background = Image.new("RGB", image.size, (255, 255, 255))
         background.paste(image, mask=image.split()[-1])
         image = background
 
-    image = image.convert('L')  # Grayscale
+    image = image.convert("L")  # Grayscale
     image_array = np.array(image)
 
     # Crop bounding box of drawn content
@@ -89,24 +90,25 @@ def preprocess_image(image_data):
     image_array = 255 - image_array
 
     # Normalize and enhance contrast
-    image_array = image_array.astype('float32') / 255.0
+    image_array = image_array.astype("float32") / 255.0
     image_array = np.clip(image_array * 1.2, 0, 1)
 
     # Reshape for model
     return image_array.reshape(1, 28, 28, 1)
 
-@app.route('/')
+@app.route("/")
 def index():
-    return render_template('index.html')  # Make sure templates/index.html exists
+    return render_template("index.html")  # Make sure templates/index.html exists
 
-@app.route('/predict', methods=['POST'])
+@app.route("/predict", methods=["POST"])
 def predict():
     try:
         data = request.get_json()
-        if not data or 'image' not in data:
-            return jsonify({'success': False, 'error': 'No image data provided'})
+        if not data or "image" not in data:
+            return jsonify({"success": False, "error": "No image data provided"})
 
-        processed_image = preprocess_image(data['image'])
+        processed_image = preprocess_image(data["image"])
+        model = load_model()
         prediction = model.predict(processed_image)
         predicted_class = int(np.argmax(prediction[0]))
         confidence = float(prediction[0][predicted_class])
@@ -115,44 +117,43 @@ def predict():
         top_3_indices = np.argsort(prediction[0])[-3:][::-1]
         top_3_predictions = [
             {
-                'character': class_names[i],
-                'confidence': float(prediction[0][i])
+                "character": class_names[i],
+                "confidence": float(prediction[0][i])
             } for i in top_3_indices
         ]
 
         return jsonify({
-            'success': True,
-            'prediction': predicted_character,
-            'confidence': confidence,
-            'top_3': top_3_predictions
+            "success": True,
+            "prediction": predicted_character,
+            "confidence": confidence,
+            "top_3": top_3_predictions
         })
 
     except Exception as e:
         logging.exception("Prediction failed")
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({"success": False, "error": str(e)})
 
-@app.route('/debug_image', methods=['POST'])
+@app.route("/debug_image", methods=["POST"])
 def debug_image():
     try:
         data = request.get_json()
-        if not data or 'image' not in data:
-            return jsonify({'success': False, 'error': 'No image data provided'})
+        if not data or "image" not in data:
+            return jsonify({"success": False, "error": "No image data provided"})
 
-        processed_image = preprocess_image(data['image'])
+        processed_image = preprocess_image(data["image"])
         debug_image = (processed_image[0, :, :, 0] * 255).astype(np.uint8)
-        _, buffer = cv2.imencode('.png', debug_image)
-        debug_base64 = base64.b64encode(buffer).decode('utf-8')
+        _, buffer = cv2.imencode(".png", debug_image)
+        debug_base64 = base64.b64encode(buffer).decode("utf-8")
 
         return jsonify({
-            'success': True,
-            'debug_image': f'data:image/png;base64,{debug_base64}'
+            "success": True,
+            "debug_image": f"data:image/png;base64,{debug_base64}"
         })
 
     except Exception as e:
         logging.exception("Debug image failed")
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({"success": False, "error": str(e)})
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    debug_mode = os.environ.get('FLASK_ENV') != 'production'
-    app.run(host='0.0.0.0', port=port, debug=debug_mode)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
